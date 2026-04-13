@@ -1,8 +1,13 @@
 package statistic
 
+import C "github.com/metacubex/mihomo/constant"
+
 type RequestNotify func(c Tracker)
 
+type RequestFailureNotify func(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err error)
+
 var DefaultRequestNotify RequestNotify
+var DefaultRequestFailureNotify RequestFailureNotify
 
 func (m *Manager) TotalTraffic(onlyProxy bool) (up, down int64) {
 	if onlyProxy {

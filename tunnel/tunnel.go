@@ -428,6 +428,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 	if err := preHandleMetadata(metadata.Clone()); err != nil { // precheck without modify metadata
 		packet.Drop()
 		log.Debugln("[Metadata PreHandle] error: %s", err)
+		notifyRequestFailure(metadata, nil, nil, err)
 		return
 	}
 
@@ -446,6 +447,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 
 			if err := sender.DoSniff(metadata); err != nil {
 				log.Warnln("[UDP] DoSniff error: %s", err.Error())
+				notifyRequestFailure(metadata, nil, nil, err)
 				return nil, nil, err
 			}
 
@@ -454,6 +456,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 			proxy, rule, err := resolveMetadata(metadata)
 			if err != nil {
 				log.Warnln("[UDP] Parse metadata failed: %s", err.Error())
+				notifyRequestFailure(metadata, nil, nil, err)
 				return nil, nil, err
 			}
 
@@ -466,6 +469,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 				logMetadataErr(metadata, rule, proxy, err)
 			})
 			if err != nil {
+				notifyRequestFailure(metadata, rule, proxy, err)
 				return nil, nil, err
 			}
 			logMetadata(metadata, rule, rawPc)
@@ -531,6 +535,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 	if preHandleFailed {
 		log.Debugln("[Metadata PreHandle] failed to sniff a domain for connection %s --> %s, give up",
 			metadata.SourceDetail(), metadata.RemoteAddress())
+		notifyRequestFailure(metadata, nil, nil, errors.New("failed to resolve domain for connection"))
 		return
 	}
 
@@ -548,6 +553,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 	proxy, rule, err := resolveMetadata(metadata)
 	if err != nil {
 		log.Warnln("[Metadata] parse failed: %s", err.Error())
+		notifyRequestFailure(metadata, nil, nil, err)
 		return
 	}
 
@@ -601,6 +607,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 		logMetadataErr(metadata, rule, proxy, err)
 	})
 	if err != nil {
+		notifyRequestFailure(metadata, rule, proxy, err)
 		return
 	}
 	logMetadata(metadata, rule, remoteConn)
@@ -623,6 +630,13 @@ func logMetadataErr(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err
 	} else {
 		log.Warnln("[%s] dial %s (match %s/%s) %s --> %s error: %s", strings.ToUpper(metadata.NetWork.String()), proxy.Name(), rule.RuleType().String(), rule.Payload(), metadata.SourceDetail(), metadata.RemoteAddress(), err.Error())
 	}
+}
+
+func notifyRequestFailure(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err error) {
+	if statistic.DefaultRequestFailureNotify == nil || metadata == nil || err == nil {
+		return
+	}
+	statistic.DefaultRequestFailureNotify(metadata, rule, proxy, err)
 }
 
 func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
