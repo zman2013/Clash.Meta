@@ -22,3 +22,13 @@ func (m *Manager) NowTraffic(onlyProxy bool) (up, down int64) {
 	}
 	return m.uploadBlip.Load(), m.downloadBlip.Load()
 }
+
+// DefaultTrafficNotify observes payload deltas at the same points as the core
+// counters. Set once before traffic starts; no UI listener is required.
+var DefaultTrafficNotify func(info *TrackerInfo, upload, download int64)
+
+func (info *TrackerInfo) notifyTraffic(upload, download int64) {
+	if DefaultTrafficNotify != nil && (upload > 0 || download > 0) {
+		DefaultTrafficNotify(info, upload, download)
+	}
+}
