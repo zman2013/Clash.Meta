@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -39,9 +40,15 @@ type HealthCheck struct {
 	lastTouch      atomic.TypedValue[time.Time]
 	singleDo       *singledo.Single[struct{}]
 	timeout        time.Duration
+	androidPolicy  bool
+	lastRoundStart time.Time
 }
 
 func (hc *HealthCheck) process() {
+	if hc.androidPolicy {
+		hc.processAndroid()
+		return
+	}
 	ticker := time.NewTicker(hc.interval)
 	go hc.check()
 	for {
@@ -62,7 +69,9 @@ func (hc *HealthCheck) process() {
 }
 
 func (hc *HealthCheck) setProxies(proxies []C.Proxy) {
+	hc.mu.Lock()
 	hc.proxies = proxies
+	hc.mu.Unlock()
 }
 
 func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.IntRanges[uint16], filter string, interval uint) {
@@ -77,7 +86,7 @@ func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.
 
 	// if the provider has not set up health checks, then modify it to be the same as the group's interval
 	if hc.interval == 0 {
-		hc.interval = time.Duration(interval) * time.Second
+		hc.interval = healthCheckInterval(interval, hc.androidPolicy)
 	}
 
 	if hc.extra == nil {
@@ -121,7 +130,14 @@ func (hc *HealthCheck) touch() {
 }
 
 func (hc *HealthCheck) check() {
-	if len(hc.proxies) == 0 {
+	hc.checkAt(time.Now())
+}
+
+func (hc *HealthCheck) checkAt(now time.Time) {
+	hc.mu.Lock()
+	proxies := hc.proxies
+	hc.mu.Unlock()
+	if len(proxies) == 0 || !hc.beginRound(now) {
 		return
 	}
 
@@ -133,12 +149,12 @@ func (hc *HealthCheck) check() {
 
 		// execute default health check
 		option := &extraOption{filters: nil, expectedStatus: hc.expectedStatus}
-		hc.execute(b, hc.url, id, option)
+		hc.execute(b, proxies, hc.url, id, option)
 
 		// execute extra health check
 		if len(hc.extra) != 0 {
 			for url, option := range hc.extra {
-				hc.execute(b, url, id, option)
+				hc.execute(b, proxies, url, id, option)
 			}
 		}
 		_ = b.Wait()
@@ -147,7 +163,7 @@ func (hc *HealthCheck) check() {
 	})
 }
 
-func (hc *HealthCheck) execute(b *errgroup.Group, url, uid string, option *extraOption) {
+func (hc *HealthCheck) execute(b *errgroup.Group, proxies []C.Proxy, url, uid string, option *extraOption) {
 	url = strings.TrimSpace(url)
 	if len(url) == 0 {
 		log.Debugln("Health Check has been skipped due to testUrl is empty, {%s}", uid)
@@ -168,7 +184,10 @@ func (hc *HealthCheck) execute(b *errgroup.Group, url, uid string, option *extra
 		}
 	}
 
-	for _, proxy := range hc.proxies {
+	for _, proxy := range proxies {
+		if hc.androidPolicy && !isAndroidProbeCandidate(proxy) {
+			continue
+		}
 		// skip proxies that do not require health check
 		if filterReg != nil {
 			if match, _ := filterReg.MatchString(proxy.Name()); !match {
@@ -209,7 +228,8 @@ func NewHealthCheck(proxies []C.Proxy, url string, timeout uint, interval uint, 
 		url:            url,
 		timeout:        time.Duration(timeout) * time.Millisecond,
 		extra:          map[string]*extraOption{},
-		interval:       time.Duration(interval) * time.Second,
+		interval:       healthCheckInterval(interval, runtime.GOOS == "android"),
+		androidPolicy:  runtime.GOOS == "android",
 		lazy:           lazy,
 		expectedStatus: expectedStatus,
 		singleDo:       singledo.NewSingle[struct{}](time.Second),
