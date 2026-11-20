@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"time"
 
 	"github.com/metacubex/mihomo/common/callback"
@@ -33,6 +34,7 @@ type URLTest struct {
 	Icon           string
 	fastNode       C.Proxy
 	fastSingle     *singledo.Single[C.Proxy]
+	android        *androidURLTest
 }
 
 func (u *URLTest) Now() string {
@@ -55,6 +57,11 @@ func (u *URLTest) Set(name string) error {
 }
 
 func (u *URLTest) ForceSet(name string) {
+	if u.android != nil {
+		u.android.Lock()
+		defer u.android.Unlock()
+		u.android.cachedAt = time.Time{}
+	}
 	u.selected = name
 	u.fastSingle.Reset()
 }
@@ -66,6 +73,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
+		u.androidDialFailed(proxy, err)
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -74,6 +82,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 			if err == nil {
 				u.onDialSuccess()
 			} else {
+				u.androidDialFailed(proxy, err)
 				u.onDialFailed(proxy.Type(), err, u.healthCheck)
 			}
 		})
@@ -89,6 +98,7 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
+		u.androidDialFailed(proxy, err)
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -107,6 +117,9 @@ func (u *URLTest) healthCheck() {
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
+	if u.android != nil {
+		return u.fastAndroid(touch)
+	}
 	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
 		proxies := u.GetProxies(touch)
 		if u.selected != "" {
@@ -179,10 +192,18 @@ func (u *URLTest) MarshalJSON() ([]byte, error) {
 		"all":            all,
 		"testUrl":        u.testUrl,
 		"expectedStatus": u.expectedStatus,
-		"fixed":          u.selected,
+		"fixed":          u.fixedSelection(),
 		"hidden":         u.Hidden,
 		"icon":           u.Icon,
 	})
+}
+
+func (u *URLTest) fixedSelection() string {
+	if u.android != nil {
+		u.android.Lock()
+		defer u.android.Unlock()
+	}
+	return u.selected
 }
 
 func (u *URLTest) Providers() []P.ProxyProvider {
@@ -232,6 +253,9 @@ func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options 
 
 	for _, option := range options {
 		option(urlTest)
+	}
+	if runtime.GOOS == "android" {
+		urlTest.android = &androidURLTest{}
 	}
 
 	return urlTest

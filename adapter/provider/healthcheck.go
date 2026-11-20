@@ -184,10 +184,10 @@ func (hc *HealthCheck) execute(b *errgroup.Group, proxies []C.Proxy, url, uid st
 		}
 	}
 
+	if hc.androidPolicy {
+		proxies = androidProbeCandidates(proxies, url, time.Now())
+	}
 	for _, proxy := range proxies {
-		if hc.androidPolicy && !isAndroidProbeCandidate(proxy) {
-			continue
-		}
 		// skip proxies that do not require health check
 		if filterReg != nil {
 			if match, _ := filterReg.MatchString(proxy.Name()); !match {
@@ -200,7 +200,11 @@ func (hc *HealthCheck) execute(b *errgroup.Group, proxies []C.Proxy, url, uid st
 			ctx, cancel := context.WithTimeout(hc.ctx, hc.timeout)
 			defer cancel()
 			log.Debugln("Health Checking, proxy: %s, url: %s, id: {%s}", p.Name(), url, uid)
-			_, _ = p.URLTest(ctx, url, expectedStatus)
+			if hc.androidPolicy {
+				probeAndroid(ctx, p, url, expectedStatus)
+			} else {
+				_, _ = p.URLTest(ctx, url, expectedStatus)
+			}
 			log.Debugln("Health Checked, proxy: %s, url: %s, alive: %t, delay: %d ms uid: {%s}", p.Name(), url, p.AliveForTestUrl(url), p.LastDelayForTestUrl(url), uid)
 			return nil
 		})

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"runtime"
 	"strings"
+	stdatomic "sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
@@ -21,6 +23,9 @@ import (
 )
 
 var UnifiedDelay = atomic.NewBool(false)
+
+// URLTestRevision changes after new health results are available to Android groups.
+var URLTestRevision stdatomic.Uint64
 
 const (
 	defaultHistoriesNum = 10
@@ -201,6 +206,9 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 			state.history.Pop()
 		}
 
+		if runtime.GOOS == "android" {
+			URLTestRevision.Add(1)
+		}
 	}()
 
 	unifiedDelay := UnifiedDelay.Load()
